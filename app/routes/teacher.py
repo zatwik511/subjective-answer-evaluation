@@ -2,7 +2,8 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required, current_user
 from functools import wraps
 from app import db
-from app.models import Exam, Question, Submission
+from app.models import Exam, Question, Submission, Answer
+from app.grading import grade_answer, detect_ai_generated
 
 teacher_bp = Blueprint('teacher', __name__, url_prefix='/teacher')
 
@@ -231,6 +232,74 @@ def exam_detail(exam_id):
     submissions = Submission.query.filter_by(exam_id=exam_id)\
                                   .order_by(Submission.submitted_at.desc()).all()
     return render_template('teacher/exam_detail.html', exam=exam, submissions=submissions)
+
+
+# ── Grading ────────────────────────────────────────────────────────────────────
+
+@teacher_bp.route('/grade/<int:submission_id>', methods=['POST'])
+@login_required
+@teacher_required
+def grade_submission(submission_id):
+    submission = Submission.query.get_or_404(submission_id)
+    exam = Exam.query.filter_by(id=submission.exam_id, teacher_id=current_user.id).first_or_404()
+
+    try:
+        total = 0.0
+        for answer in submission.answers:
+            result = grade_answer(answer.question, answer.answer_text)
+            ai_prob = detect_ai_generated(answer.answer_text)
+            answer.score = result['score']
+            answer.feedback = result['feedback']
+            answer.ai_flag_score = ai_prob
+            total += result['score']
+
+        submission.total_score = total
+        submission.status = 'graded'
+        db.session.commit()
+        flash(f'Submission graded. Total score: {total:.1f}', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Grading failed: {e}', 'danger')
+
+    return redirect(url_for('teacher.exam_detail', exam_id=submission.exam_id))
+
+
+@teacher_bp.route('/grade_all/<int:exam_id>', methods=['POST'])
+@login_required
+@teacher_required
+def grade_all(exam_id):
+    exam = Exam.query.filter_by(id=exam_id, teacher_id=current_user.id).first_or_404()
+    pending = Submission.query.filter_by(exam_id=exam_id, status='pending').all()
+
+    if not pending:
+        flash('No pending submissions to grade.', 'info')
+        return redirect(url_for('teacher.exam_detail', exam_id=exam_id))
+
+    graded_count = 0
+    errors = 0
+    for submission in pending:
+        try:
+            total = 0.0
+            for answer in submission.answers:
+                result = grade_answer(answer.question, answer.answer_text)
+                ai_prob = detect_ai_generated(answer.answer_text)
+                answer.score = result['score']
+                answer.feedback = result['feedback']
+                answer.ai_flag_score = ai_prob
+                total += result['score']
+            submission.total_score = total
+            submission.status = 'graded'
+            db.session.commit()
+            graded_count += 1
+        except Exception:
+            db.session.rollback()
+            errors += 1
+
+    msg = f'Graded {graded_count} submission(s).'
+    if errors:
+        msg += f' {errors} failed — check API key.'
+    flash(msg, 'success' if not errors else 'warning')
+    return redirect(url_for('teacher.exam_detail', exam_id=exam_id))
 
 
 # ── Delete exam ────────────────────────────────────────────────────────────────

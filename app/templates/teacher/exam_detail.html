@@ -21,9 +21,20 @@
       <span class="badge bg-secondary"><i class="bi bi-pencil me-1"></i>Draft</span>
     {% endif %}
   </div>
-  <a href="{{ url_for('teacher.edit_exam', exam_id=exam.id) }}" class="btn btn-outline-dark btn-sm">
-    <i class="bi bi-pencil-square me-1"></i>Edit Exam
-  </a>
+  <div class="d-flex gap-2">
+    {% set pending_count = submissions|selectattr('status', 'eq', 'pending')|list|length %}
+    {% if pending_count > 0 %}
+    <form method="POST" action="{{ url_for('teacher.grade_all', exam_id=exam.id) }}"
+          onsubmit="return confirm('Grade all {{ pending_count }} pending submission(s) with AI? This may take a moment.');">
+      <button type="submit" class="btn btn-success btn-sm">
+        <i class="bi bi-robot me-1"></i>Grade All Pending ({{ pending_count }})
+      </button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('teacher.edit_exam', exam_id=exam.id) }}" class="btn btn-outline-dark btn-sm">
+      <i class="bi bi-pencil-square me-1"></i>Edit Exam
+    </a>
+  </div>
 </div>
 
 <!-- Stats row -->
@@ -110,9 +121,19 @@
             {% endif %}
           </td>
           <td class="text-end">
+            {% if sub.status == 'pending' %}
+            <form method="POST" action="{{ url_for('teacher.grade_submission', submission_id=sub.id) }}"
+                  class="d-inline"
+                  onsubmit="return confirm('Grade this submission with AI?');">
+              <button type="submit" class="btn btn-sm btn-success">
+                <i class="bi bi-robot me-1"></i>Grade
+              </button>
+            </form>
+            {% else %}
             <a href="#" class="btn btn-sm btn-outline-dark disabled">
               <i class="bi bi-search me-1"></i>Review
             </a>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
