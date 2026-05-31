@@ -34,24 +34,85 @@
     padding: 2px 8px;
     border-radius: 999px;
   }
+
+  /* Fullscreen overlay */
+  #fullscreen-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    flex-direction: column;
+    gap: 16px;
+    text-align: center;
+    padding: 24px;
+  }
+  #fs-warning-banner {
+    display: none;
+    position: fixed;
+    top: 104px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1030;
+    background: #dc3545;
+    color: #fff;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
 </style>
 {% endblock %}
 
 {% block content %}
 
+<!-- Fullscreen start overlay -->
+<div id="fullscreen-overlay">
+  <i class="bi bi-shield-lock-fill" style="font-size:3rem;"></i>
+  <h4 class="fw-bold mb-0">{{ exam.title }}</h4>
+  <p class="text-white-50 mb-2">
+    {{ exam.questions|length }} questions &nbsp;·&nbsp;
+    {{ exam.time_limit_minutes }} minutes &nbsp;·&nbsp;
+    {{ exam.questions|sum(attribute='max_marks') }} marks
+  </p>
+  <ul class="text-white-50 small text-start mb-3">
+    <li>Tab switching and window focus changes are tracked.</li>
+    <li>Copy-paste is monitored per question.</li>
+    <li>Leaving fullscreen is logged.</li>
+    <li>Your answers are saved automatically on submit.</li>
+  </ul>
+  <button id="start-btn" class="btn btn-light btn-lg px-5 fw-bold">
+    <i class="bi bi-play-circle me-2"></i>Enter Fullscreen & Begin
+  </button>
+  <small class="text-white-50">If your browser blocks fullscreen, click Allow.</small>
+</div>
+
+<!-- Fullscreen-exit warning banner -->
+<div id="fs-warning-banner">
+  <i class="bi bi-exclamation-triangle me-2"></i>
+  Fullscreen exited — this has been logged. Please return to fullscreen.
+</div>
+
 <!-- Timer bar -->
 <div id="timer-bar">
   <div class="d-flex align-items-center gap-3">
     <span class="fw-bold">{{ exam.title }}</span>
-    <span class="text-muted small">{{ exam.questions|length }} questions &nbsp;·&nbsp; {{ exam.questions|sum(attribute='max_marks') }} marks</span>
+    <span class="text-muted small">
+      {{ exam.questions|length }} questions &nbsp;·&nbsp;
+      {{ exam.questions|sum(attribute='max_marks') }} marks
+    </span>
   </div>
   <div class="d-flex align-items-center gap-2">
+    <span id="cheat-indicators" class="text-muted small me-3"></span>
     <i class="bi bi-clock text-muted"></i>
-    <span id="timer-display">{{ '%02d:%02d'|format(exam.time_limit_minutes, 0) }}</span>
+    <span id="timer-display">{{ '%02d:00'|format(exam.time_limit_minutes) }}</span>
   </div>
 </div>
 
-<!-- Confirm before leaving page -->
+<!-- Exam form -->
 <form method="POST" action="{{ url_for('student.submit_exam', exam_id=exam.id) }}"
       id="exam-form">
 
@@ -59,7 +120,7 @@
     <div class="col-lg-8">
 
       {% for q in exam.questions %}
-      <div class="card p-4 mb-4 question-card" id="q-{{ q.id }}">
+      <div class="card p-4 mb-4 question-card" id="q-card-{{ q.id }}">
         <div class="d-flex justify-content-between align-items-start mb-3">
           <div>
             <span class="text-muted fw-bold small me-2">Question {{ loop.index }}</span>
@@ -85,22 +146,16 @@
 
         <div class="d-flex justify-content-between mt-2">
           <span class="text-muted small" id="charcount-{{ q.id }}">0 characters</span>
-          {% if q.type == 'short' %}
-            <span class="text-muted small">Aim for 2–4 sentences</span>
-          {% elif q.type == 'long' %}
-            <span class="text-muted small">Aim for 1–2 paragraphs</span>
-          {% else %}
-            <span class="text-muted small">Aim for 3–5 paragraphs</span>
-          {% endif %}
+          <span class="text-muted small" id="paste-flag-{{ q.id }}"></span>
         </div>
       </div>
       {% endfor %}
 
-      <!-- Submit section -->
       <div class="card p-4 mb-5 border-dark">
         <h6 class="fw-bold mb-1">Ready to submit?</h6>
         <p class="text-muted small mb-3">
-          Once submitted you cannot edit your answers. Unanswered questions will be scored 0.
+          Once submitted you cannot edit your answers.
+          Unanswered questions will be scored 0.
         </p>
         <button type="submit" class="btn btn-dark btn-lg w-100" id="submit-btn">
           <i class="bi bi-send-check me-2"></i>Submit Exam
@@ -115,65 +170,155 @@
 
 {% block scripts %}
 <script>
-  // ── Timer ──────────────────────────────────────────────────────────────────
-  const TOTAL_SECONDS = {{ exam.time_limit_minutes }} * 60;
-  const STORAGE_KEY = 'exam_timer_{{ exam.id }}_{{ current_user.id }}';
+const EXAM_ID        = {{ exam.id }};
+const SUBMISSION_ID  = {{ submission.id }};
+const TOTAL_SECONDS  = {{ exam.time_limit_minutes }} * 60;
+const STORAGE_KEY    = `exam_timer_${EXAM_ID}_{{ current_user.id }}`;
+const LOG_URL        = "{{ url_for('exam.log_event') }}";
 
-  function getEndTime() {
-    const stored = sessionStorage.getItem(STORAGE_KEY);
-    if (stored) return parseInt(stored);
-    const end = Date.now() + TOTAL_SECONDS * 1000;
-    sessionStorage.setItem(STORAGE_KEY, end);
-    return end;
+// ── Counters (live UI only, source of truth is server) ─────────────────────────
+let tabSwitchCount = 0;
+let pasteCount     = 0;
+
+function updateIndicators() {
+  const el = document.getElementById('cheat-indicators');
+  const parts = [];
+  if (tabSwitchCount > 0) parts.push(`<i class="bi bi-eye-slash text-danger"></i> ${tabSwitchCount} tab switch${tabSwitchCount !== 1 ? 'es' : ''}`);
+  if (pasteCount     > 0) parts.push(`<i class="bi bi-clipboard text-warning"></i> ${pasteCount} paste${pasteCount !== 1 ? 's' : ''}`);
+  el.innerHTML = parts.join(' &nbsp; ');
+}
+
+// ── Event logger ───────────────────────────────────────────────────────────────
+function logEvent(eventType, questionId, metadata) {
+  fetch(LOG_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      exam_id:     EXAM_ID,
+      event_type:  eventType,
+      question_id: questionId || null,
+      metadata:    metadata || {}
+    })
+  });
+}
+
+// ── Tab / window switch detection ─────────────────────────────────────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    tabSwitchCount++;
+    updateIndicators();
+    logEvent('tab_switch', null, { count: tabSwitchCount, ts: Date.now() });
   }
+});
+window.addEventListener('blur', () => {
+  tabSwitchCount++;
+  updateIndicators();
+  logEvent('tab_switch', null, { trigger: 'blur', count: tabSwitchCount, ts: Date.now() });
+});
 
-  const endTime = getEndTime();
-  const display = document.getElementById('timer-display');
+// ── Paste detection ────────────────────────────────────────────────────────────
+document.querySelectorAll('textarea[data-question-id]').forEach(ta => {
+  const qid = parseInt(ta.dataset.questionId);
 
-  function updateTimer() {
-    const remaining = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
-    const m = Math.floor(remaining / 60);
-    const s = remaining % 60;
-    display.textContent = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  ta.addEventListener('paste', e => {
+    const clip = (e.clipboardData || window.clipboardData).getData('text');
+    pasteCount++;
+    updateIndicators();
+    const flag = document.getElementById(`paste-flag-${qid}`);
+    if (flag) flag.innerHTML = `<span class="text-danger small"><i class="bi bi-exclamation-circle me-1"></i>Paste detected</span>`;
+    logEvent('paste', qid, { char_count: clip.length, ts: Date.now() });
+  });
 
-    if (remaining <= 300) display.classList.add('warning');   // last 5 min
-
-    if (remaining === 0) {
-      sessionStorage.removeItem(STORAGE_KEY);
-      autoSubmit();
+  // Typing-speed anomaly: >50 chars appearing in <500ms
+  let prevLen = 0;
+  let prevTime = Date.now();
+  ta.addEventListener('input', () => {
+    const now     = Date.now();
+    const elapsed = now - prevTime;
+    const delta   = ta.value.length - prevLen;
+    if (delta > 50 && elapsed < 500) {
+      logEvent('typing_anomaly', qid, { delta, elapsed_ms: elapsed, ts: now });
     }
+    prevLen  = ta.value.length;
+    prevTime = now;
+    const counter = document.getElementById(`charcount-${qid}`);
+    if (counter) counter.textContent = ta.value.length + ' characters';
+  });
+});
+
+// ── Right-click disabled ──────────────────────────────────────────────────────
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+// ── Keyboard shortcut block ───────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  // Block F12, Ctrl+Shift+I/J/C (DevTools), Ctrl+U (view source)
+  if (e.key === 'F12') { e.preventDefault(); return; }
+  if (e.ctrlKey && e.shiftKey && ['I','J','C'].includes(e.key.toUpperCase())) { e.preventDefault(); return; }
+  if (e.ctrlKey && e.key.toUpperCase() === 'U') { e.preventDefault(); return; }
+});
+
+// ── Fullscreen ────────────────────────────────────────────────────────────────
+const overlay   = document.getElementById('fullscreen-overlay');
+const startBtn  = document.getElementById('start-btn');
+const fsBanner  = document.getElementById('fs-warning-banner');
+let fsWarningTimer = null;
+
+startBtn.addEventListener('click', () => {
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
+  if (req) req.call(el).catch(() => {});
+  overlay.style.display = 'none';
+});
+
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && overlay.style.display === 'none') {
+    // Student exited fullscreen mid-exam
+    logEvent('fullscreen_exit', null, { ts: Date.now() });
+    fsBanner.style.display = 'block';
+    clearTimeout(fsWarningTimer);
+    fsWarningTimer = setTimeout(() => { fsBanner.style.display = 'none'; }, 5000);
   }
+});
 
-  function autoSubmit() {
-    display.textContent = '00:00';
-    const btn = document.getElementById('submit-btn');
-    btn.textContent = 'Time is up — Submitting...';
-    btn.disabled = true;
-    document.getElementById('exam-form').submit();
+// ── Timer ─────────────────────────────────────────────────────────────────────
+function getEndTime() {
+  const stored = sessionStorage.getItem(STORAGE_KEY);
+  if (stored) return parseInt(stored);
+  const end = Date.now() + TOTAL_SECONDS * 1000;
+  sessionStorage.setItem(STORAGE_KEY, end);
+  return end;
+}
+
+const endTime = getEndTime();
+const display = document.getElementById('timer-display');
+
+function updateTimer() {
+  const remaining = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+  const m = Math.floor(remaining / 60);
+  const s = remaining % 60;
+  display.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  if (remaining <= 300) display.classList.add('warning');
+  if (remaining === 0) {
+    sessionStorage.removeItem(STORAGE_KEY);
+    autoSubmit();
   }
+}
 
-  updateTimer();
-  setInterval(updateTimer, 1000);
+function autoSubmit() {
+  const btn = document.getElementById('submit-btn');
+  btn.textContent = 'Time is up — Submitting...';
+  btn.disabled = true;
+  document.getElementById('exam-form').submit();
+}
 
-  // ── Character counters ─────────────────────────────────────────────────────
-  document.querySelectorAll('textarea[data-question-id]').forEach(ta => {
-    const qid = ta.dataset.questionId;
-    const counter = document.getElementById('charcount-' + qid);
-    ta.addEventListener('input', () => {
-      counter.textContent = ta.value.length + ' characters';
-    });
-  });
+updateTimer();
+setInterval(updateTimer, 1000);
 
-  // ── Warn before leaving ────────────────────────────────────────────────────
-  let submitted = false;
-  document.getElementById('exam-form').addEventListener('submit', () => {
-    submitted = true;
-  });
-  window.addEventListener('beforeunload', e => {
-    if (!submitted) {
-      e.preventDefault();
-      e.returnValue = '';
-    }
-  });
+// ── Warn before leaving ───────────────────────────────────────────────────────
+let submitted = false;
+document.getElementById('exam-form').addEventListener('submit', () => { submitted = true; });
+window.addEventListener('beforeunload', e => {
+  if (!submitted) { e.preventDefault(); e.returnValue = ''; }
+});
 </script>
 {% endblock %}
