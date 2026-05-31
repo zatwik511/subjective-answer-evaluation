@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}{{ exam.title }}{% endblock %}
+
+{% block head %}
+<style>
+  #timer-bar {
+    position: fixed;
+    top: 56px;
+    left: 0;
+    right: 0;
+    z-index: 1020;
+    background: #fff;
+    border-bottom: 1px solid #dee2e6;
+    padding: 8px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  }
+  body { padding-top: 52px; }
+  #timer-display {
+    font-size: 1.2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    min-width: 80px;
+    text-align: right;
+  }
+  #timer-display.warning { color: #dc3545; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .question-card { scroll-margin-top: 120px; }
+  textarea.form-control { resize: vertical; }
+  .question-type-pill {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Timer bar -->
+<div id="timer-bar">
+  <div class="d-flex align-items-center gap-3">
+    <span class="fw-bold">{{ exam.title }}</span>
+    <span class="text-muted small">{{ exam.questions|length }} questions &nbsp;·&nbsp; {{ exam.questions|sum(attribute='max_marks') }} marks</span>
+  </div>
+  <div class="d-flex align-items-center gap-2">
+    <i class="bi bi-clock text-muted"></i>
+    <span id="timer-display">{{ '%02d:%02d'|format(exam.time_limit_minutes, 0) }}</span>
+  </div>
+</div>
+
+<!-- Confirm before leaving page -->
+<form method="POST" action="{{ url_for('student.submit_exam', exam_id=exam.id) }}"
+      id="exam-form">
+
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+
+      {% for q in exam.questions %}
+      <div class="card p-4 mb-4 question-card" id="q-{{ q.id }}">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <div>
+            <span class="text-muted fw-bold small me-2">Question {{ loop.index }}</span>
+            <span class="question-type-pill border text-muted">
+              {% if q.type == 'short' %}Short Answer
+              {% elif q.type == 'long' %}Long Answer
+              {% else %}Essay{% endif %}
+            </span>
+          </div>
+          <span class="badge bg-dark">{{ q.max_marks }} mark{{ 's' if q.max_marks != 1 }}</span>
+        </div>
+
+        <p class="fw-semibold mb-3">{{ q.text }}</p>
+
+        <textarea
+          name="answer_{{ q.id }}"
+          class="form-control"
+          id="textarea-{{ q.id }}"
+          rows="{% if q.type == 'short' %}4{% elif q.type == 'long' %}8{% else %}12{% endif %}"
+          placeholder="Write your answer here..."
+          data-question-id="{{ q.id }}"
+        ></textarea>
+
+        <div class="d-flex justify-content-between mt-2">
+          <span class="text-muted small" id="charcount-{{ q.id }}">0 characters</span>
+          {% if q.type == 'short' %}
+            <span class="text-muted small">Aim for 2–4 sentences</span>
+          {% elif q.type == 'long' %}
+            <span class="text-muted small">Aim for 1–2 paragraphs</span>
+          {% else %}
+            <span class="text-muted small">Aim for 3–5 paragraphs</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+
+      <!-- Submit section -->
+      <div class="card p-4 mb-5 border-dark">
+        <h6 class="fw-bold mb-1">Ready to submit?</h6>
+        <p class="text-muted small mb-3">
+          Once submitted you cannot edit your answers. Unanswered questions will be scored 0.
+        </p>
+        <button type="submit" class="btn btn-dark btn-lg w-100" id="submit-btn">
+          <i class="bi bi-send-check me-2"></i>Submit Exam
+        </button>
+      </div>
+
+    </div>
+  </div>
+</form>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ── Timer ──────────────────────────────────────────────────────────────────
+  const TOTAL_SECONDS = {{ exam.time_limit_minutes }} * 60;
+  const STORAGE_KEY = 'exam_timer_{{ exam.id }}_{{ current_user.id }}';
+
+  function getEndTime() {
+    const stored = sessionStorage.getItem(STORAGE_KEY);
+    if (stored) return parseInt(stored);
+    const end = Date.now() + TOTAL_SECONDS * 1000;
+    sessionStorage.setItem(STORAGE_KEY, end);
+    return end;
+  }
+
+  const endTime = getEndTime();
+  const display = document.getElementById('timer-display');
+
+  function updateTimer() {
+    const remaining = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+    const m = Math.floor(remaining / 60);
+    const s = remaining % 60;
+    display.textContent = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+
+    if (remaining <= 300) display.classList.add('warning');   // last 5 min
+
+    if (remaining === 0) {
+      sessionStorage.removeItem(STORAGE_KEY);
+      autoSubmit();
+    }
+  }
+
+  function autoSubmit() {
+    display.textContent = '00:00';
+    const btn = document.getElementById('submit-btn');
+    btn.textContent = 'Time is up — Submitting...';
+    btn.disabled = true;
+    document.getElementById('exam-form').submit();
+  }
+
+  updateTimer();
+  setInterval(updateTimer, 1000);
+
+  // ── Character counters ─────────────────────────────────────────────────────
+  document.querySelectorAll('textarea[data-question-id]').forEach(ta => {
+    const qid = ta.dataset.questionId;
+    const counter = document.getElementById('charcount-' + qid);
+    ta.addEventListener('input', () => {
+      counter.textContent = ta.value.length + ' characters';
+    });
+  });
+
+  // ── Warn before leaving ────────────────────────────────────────────────────
+  let submitted = false;
+  document.getElementById('exam-form').addEventListener('submit', () => {
+    submitted = true;
+  });
+  window.addEventListener('beforeunload', e => {
+    if (!submitted) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+</script>
+{% endblock %}

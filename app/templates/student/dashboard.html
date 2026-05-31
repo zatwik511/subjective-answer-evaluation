@@ -2,48 +2,66 @@
 {% block title %}Student Dashboard{% endblock %}
 
 {% block content %}
-<div class="row mb-4">
-  <div class="col">
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
     <h3 class="fw-bold mb-0">
-      <i class="bi bi-person me-2 text-info"></i>Student Dashboard
+      <i class="bi bi-person me-2 text-info"></i>My Exams
     </h3>
-    <p class="text-muted mt-1">Welcome back, {{ current_user.name }}</p>
+    <p class="text-muted mt-1 mb-0">Welcome back, {{ current_user.name }}</p>
   </div>
 </div>
 
+{% if active_exams %}
 <div class="row g-4">
-  <div class="col-md-6">
-    <div class="card p-4 h-100 text-center">
-      <i class="bi bi-pencil-square fs-1 text-dark mb-3"></i>
-      <h5 class="fw-bold">Available Exams</h5>
-      <p class="text-muted small">View and take exams that have been published by your teacher.</p>
-      <a href="#" class="btn btn-dark mt-auto">
-        <i class="bi bi-list-check me-1"></i>View Exams
-      </a>
+  {% for exam in active_exams %}
+  {% set status = exam_status[exam.id] %}
+  <div class="col-md-6 col-lg-4">
+    <div class="card h-100 p-4">
+      <div class="d-flex justify-content-between align-items-start mb-2">
+        <span class="badge bg-dark">{{ exam.subject }}</span>
+        {% if status == 'not_started' %}
+          <span class="badge bg-success">Available</span>
+        {% elif status == 'submitted' %}
+          <span class="badge bg-secondary">Submitted</span>
+        {% elif status == 'result_available' %}
+          <span class="badge bg-primary">Result Ready</span>
+        {% endif %}
+      </div>
+
+      <h5 class="fw-bold mt-2 mb-1">{{ exam.title }}</h5>
+
+      <ul class="list-unstyled text-muted small mb-3">
+        <li><i class="bi bi-list-ol me-2"></i>{{ exam.questions|length }} question{{ 's' if exam.questions|length != 1 }}</li>
+        <li><i class="bi bi-clock me-2"></i>{{ exam.time_limit_minutes }} minutes</li>
+        <li><i class="bi bi-award me-2"></i>{{ exam.questions|sum(attribute='max_marks') }} total marks</li>
+      </ul>
+
+      <div class="mt-auto">
+        {% if status == 'not_started' %}
+          <a href="{{ url_for('student.take_exam', exam_id=exam.id) }}"
+             class="btn btn-dark w-100">
+            <i class="bi bi-pencil-square me-1"></i>Start Exam
+          </a>
+        {% elif status == 'submitted' %}
+          <button class="btn btn-outline-secondary w-100" disabled>
+            <i class="bi bi-check-circle me-1"></i>Submitted — Awaiting Result
+          </button>
+        {% elif status == 'result_available' %}
+          <a href="#" class="btn btn-primary w-100">
+            <i class="bi bi-trophy me-1"></i>View Result
+          </a>
+        {% endif %}
+      </div>
     </div>
   </div>
-  <div class="col-md-6">
-    <div class="card p-4 h-100 text-center">
-      <i class="bi bi-trophy fs-1 text-dark mb-3"></i>
-      <h5 class="fw-bold">My Results</h5>
-      <p class="text-muted small">View scores and AI feedback for your submitted exams once released.</p>
-      <a href="#" class="btn btn-outline-dark mt-auto">
-        <i class="bi bi-graph-up me-1"></i>View Results
-      </a>
-    </div>
-  </div>
+  {% endfor %}
 </div>
 
-<div class="row mt-5">
-  <div class="col">
-    <div class="card p-4">
-      <h6 class="fw-bold text-muted mb-3">COMING IN NEXT STAGES</h6>
-      <ul class="list-unstyled mb-0">
-        <li class="mb-2"><i class="bi bi-check2-circle text-success me-2"></i>Stage 2 — Auth system <span class="badge bg-success">Done</span></li>
-        <li class="mb-2"><i class="bi bi-circle text-muted me-2"></i>Stage 4 — Exam taking interface with timer</li>
-        <li class="mb-2"><i class="bi bi-circle text-muted me-2"></i>Stage 8 — View scores &amp; AI feedback</li>
-      </ul>
-    </div>
-  </div>
+{% else %}
+<div class="card p-5 text-center">
+  <i class="bi bi-inbox fs-1 text-muted mb-3"></i>
+  <h5 class="fw-bold">No exams available</h5>
+  <p class="text-muted mb-0">Your teacher hasn't published any exams yet. Check back later.</p>
 </div>
+{% endif %}
 {% endblock %}

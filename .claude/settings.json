@@ -23,7 +23,10 @@
       "Bash(curl -s -c /tmp/tc3.txt -b /tmp/tc3.txt -X POST http://127.0.0.1:5000/teacher/exams/1/question/add -H 'Content-Type: application/x-www-form-urlencoded' -d 'text=What+is+a+computer%3F&type=short&max_marks=5&model_answer=A+computer+is+an+electronic+device&rubric=2+marks+for+electronic+device%2C+3+for+data+processing' -o /dev/null)",
       "Bash(curl -s -c /tmp/tc3.txt -b /tmp/tc3.txt -X POST http://127.0.0.1:5000/teacher/exams/1/question/add -H 'Content-Type: application/x-www-form-urlencoded' -d 'text=Explain+the+CPU&type=long&max_marks=10&model_answer=The+CPU+processes+instructions&rubric=5+marks+for+function%2C+5+for+components' -o /dev/null)",
       "Bash(curl -s -c /tmp/tc3.txt -b /tmp/tc3.txt -X POST http://127.0.0.1:5000/teacher/exams/1/toggle -o /dev/null -w 'Toggle status: %{http_code}\\\\n')",
-      "Bash(curl -s -c /tmp/tc3.txt -b /tmp/tc3.txt http://127.0.0.1:5000/teacher/exams -o /tmp/exams_page.html)"
+      "Bash(curl -s -c /tmp/tc3.txt -b /tmp/tc3.txt http://127.0.0.1:5000/teacher/exams -o /tmp/exams_page.html)",
+      "Bash(curl -s -c /tmp/sc4.txt -b /tmp/sc4.txt -X POST http://127.0.0.1:5000/auth/login -H 'Content-Type: application/x-www-form-urlencoded' -d 'email=student%40test.com&password=student123' -o /dev/null)",
+      "Bash(curl -s -c /tmp/sc4.txt -b /tmp/sc4.txt http://127.0.0.1:5000/student/dashboard -o /tmp/sdash.html)",
+      "Bash(curl -s -c /tmp/sc4.txt -b /tmp/sc4.txt http://127.0.0.1:5000/student/exam/1 -o /tmp/exam_page.html -w 'Take exam page: %{http_code}\\\\n')"
     ]
   }
 }
