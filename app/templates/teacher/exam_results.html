@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Results — {{ exam.title }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{{ url_for('teacher.exams') }}">My Exams</a></li>
+    <li class="breadcrumb-item"><a href="{{ url_for('teacher.exam_detail', exam_id=exam.id) }}">{{ exam.title }}</a></li>
+    <li class="breadcrumb-item active">Results</li>
+  </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-3">
+  <div>
+    <h3 class="fw-bold mb-1">Results: {{ exam.title }}</h3>
+    <span class="text-muted">{{ submission_data|length }} submission(s) &middot; Max score: {{ max_marks }}</span>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <div class="btn-group btn-group-sm">
+      <a href="?sort=time" class="btn btn-outline-secondary {% if sort == 'time' %}active{% endif %}">
+        <i class="bi bi-clock me-1"></i>Time
+      </a>
+      <a href="?sort=score" class="btn btn-outline-secondary {% if sort == 'score' %}active{% endif %}">
+        <i class="bi bi-sort-numeric-down me-1"></i>Score
+      </a>
+      <a href="?sort=suspicion" class="btn btn-outline-secondary {% if sort == 'suspicion' %}active{% endif %}">
+        <i class="bi bi-shield me-1"></i>Suspicion
+      </a>
+    </div>
+    <a href="{{ url_for('teacher.export_csv', exam_id=exam.id) }}" class="btn btn-outline-success btn-sm">
+      <i class="bi bi-download me-1"></i>Export CSV
+    </a>
+  </div>
+</div>
+
+<!-- Summary badges -->
+{% if submission_data %}
+<div class="row g-3 mb-4">
+  <div class="col-sm-3">
+    <div class="card p-3 text-center">
+      <div class="fs-3 fw-bold">{{ submission_data|length }}</div>
+      <div class="text-muted small">Total Submissions</div>
+    </div>
+  </div>
+  <div class="col-sm-3">
+    <div class="card p-3 text-center">
+      <div class="fs-3 fw-bold text-success">
+        {{ submission_data|selectattr('suspicion_level', 'eq', 'clean')|list|length }}
+      </div>
+      <div class="text-muted small">Clean</div>
+    </div>
+  </div>
+  <div class="col-sm-3">
+    <div class="card p-3 text-center">
+      <div class="fs-3 fw-bold text-warning">
+        {{ submission_data|selectattr('suspicion_level', 'eq', 'review')|list|length }}
+      </div>
+      <div class="text-muted small">Needs Review</div>
+    </div>
+  </div>
+  <div class="col-sm-3">
+    <div class="card p-3 text-center">
+      <div class="fs-3 fw-bold text-danger">
+        {{ submission_data|selectattr('suspicion_level', 'eq', 'flagged')|list|length }}
+      </div>
+      <div class="text-muted small">Flagged</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Student</th>
+          <th>Submitted</th>
+          <th>Score</th>
+          <th>Status</th>
+          <th>Suspicion</th>
+          <th class="text-center">Tabs</th>
+          <th class="text-center">Pastes</th>
+          <th class="text-center">Max AI%</th>
+          <th>Released</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in submission_data %}
+        {% set sub = item.submission %}
+        <tr>
+          <td>
+            <div class="fw-semibold">{{ sub.student.name }}</div>
+            <div class="text-muted small">{{ sub.student.email }}</div>
+          </td>
+          <td class="text-muted small">{{ sub.submitted_at.strftime('%d %b %Y, %H:%M') }}</td>
+          <td>
+            {% if sub.total_score is not none %}
+              <span class="fw-bold">{{ sub.total_score }}</span>
+              <span class="text-muted small">/ {{ max_marks }}</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if sub.status == 'pending' %}
+              <span class="badge bg-warning text-dark">Pending</span>
+            {% elif sub.status == 'graded' %}
+              <span class="badge bg-success">Graded</span>
+            {% elif sub.status == 'flagged' %}
+              <span class="badge bg-danger">Flagged</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if item.suspicion_level == 'flagged' %}
+              <span class="badge bg-danger">
+                <i class="bi bi-exclamation-triangle-fill me-1"></i>Flagged
+              </span>
+            {% elif item.suspicion_level == 'review' %}
+              <span class="badge bg-warning text-dark">
+                <i class="bi bi-eye-fill me-1"></i>Review
+              </span>
+            {% else %}
+              <span class="badge bg-success">
+                <i class="bi bi-check-circle-fill me-1"></i>Clean
+              </span>
+            {% endif %}
+          </td>
+          <td class="text-center fw-bold {% if item.tab_switches > 5 %}text-danger{% elif item.tab_switches >= 3 %}text-warning{% else %}text-muted{% endif %}">
+            {{ item.tab_switches }}
+          </td>
+          <td class="text-center fw-bold {% if item.total_paste > 3 %}text-danger{% elif item.total_paste >= 2 %}text-warning{% else %}text-muted{% endif %}">
+            {{ item.total_paste }}
+          </td>
+          <td class="text-center">
+            <span class="badge {% if item.max_ai > 70 %}bg-danger{% elif item.max_ai >= 30 %}bg-warning text-dark{% else %}bg-success{% endif %}">
+              {{ item.max_ai|round|int }}%
+            </span>
+          </td>
+          <td>
+            {% if sub.released %}
+              <span class="badge bg-success"><i class="bi bi-eye me-1"></i>Visible</span>
+            {% else %}
+              <span class="badge bg-secondary"><i class="bi bi-eye-slash me-1"></i>Hidden</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <a href="{{ url_for('teacher.submission_detail', submission_id=sub.id) }}"
+               class="btn btn-sm btn-outline-dark">
+              <i class="bi bi-search me-1"></i>Review
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+<div class="card p-5 text-center">
+  <i class="bi bi-inbox fs-1 text-muted mb-3"></i>
+  <h5 class="fw-bold">No submissions yet</h5>
+  <p class="text-muted mb-0">Students haven't submitted this exam yet.</p>
+</div>
+{% endif %}
+{% endblock %}

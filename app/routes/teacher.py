@@ -1,8 +1,10 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request
+import csv
+import io
+from flask import Blueprint, render_template, redirect, url_for, flash, request, Response
 from flask_login import login_required, current_user
 from functools import wraps
 from app import db
-from app.models import Exam, Question, Submission, Answer
+from app.models import Exam, Question, Submission, Answer, ExamEvent
 from app.grading import grade_answer, detect_ai_generated
 
 teacher_bp = Blueprint('teacher', __name__, url_prefix='/teacher')
@@ -315,7 +317,144 @@ def delete_exam(exam_id):
     return redirect(url_for('teacher.exams'))
 
 
+# ── Submission detail ──────────────────────────────────────────────────────────
+
+@teacher_bp.route('/submission/<int:submission_id>')
+@login_required
+@teacher_required
+def submission_detail(submission_id):
+    submission = Submission.query.get_or_404(submission_id)
+    exam = Exam.query.filter_by(id=submission.exam_id, teacher_id=current_user.id).first_or_404()
+    events = ExamEvent.query.filter_by(submission_id=submission_id).all()
+    typing_anomalies = [e for e in events if e.event_type == 'typing_anomaly']
+    level, tab_switches, total_paste, max_ai = _compute_suspicion(submission)
+    return render_template('teacher/submission_detail.html',
+                           submission=submission, exam=exam,
+                           suspicion_level=level, tab_switches=tab_switches,
+                           total_paste=total_paste, max_ai=max_ai,
+                           typing_anomalies=typing_anomalies)
+
+
+@teacher_bp.route('/submission/<int:submission_id>/override', methods=['POST'])
+@login_required
+@teacher_required
+def override_scores(submission_id):
+    submission = Submission.query.get_or_404(submission_id)
+    Exam.query.filter_by(id=submission.exam_id, teacher_id=current_user.id).first_or_404()
+    total = 0.0
+    for answer in submission.answers:
+        field = f'score_{answer.id}'
+        if field in request.form:
+            try:
+                new_score = float(request.form[field])
+                answer.score = max(0.0, min(new_score, answer.question.max_marks))
+            except ValueError:
+                pass
+        total += answer.score or 0
+    submission.total_score = total
+    db.session.commit()
+    flash('Scores updated.', 'success')
+    return redirect(url_for('teacher.submission_detail', submission_id=submission_id))
+
+
+@teacher_bp.route('/submission/<int:submission_id>/release', methods=['POST'])
+@login_required
+@teacher_required
+def release_submission(submission_id):
+    submission = Submission.query.get_or_404(submission_id)
+    Exam.query.filter_by(id=submission.exam_id, teacher_id=current_user.id).first_or_404()
+    if submission.status == 'pending':
+        flash('Grade this submission before releasing.', 'warning')
+        return redirect(url_for('teacher.submission_detail', submission_id=submission_id))
+    submission.released = not submission.released
+    db.session.commit()
+    action = 'released to' if submission.released else 'hidden from'
+    flash(f'Result {action} student.', 'success')
+    return redirect(url_for('teacher.submission_detail', submission_id=submission_id))
+
+
+# ── Exam results overview ──────────────────────────────────────────────────────
+
+@teacher_bp.route('/exam/<int:exam_id>/results')
+@login_required
+@teacher_required
+def exam_results(exam_id):
+    exam = Exam.query.filter_by(id=exam_id, teacher_id=current_user.id).first_or_404()
+    submissions = Submission.query.filter_by(exam_id=exam_id)\
+                                  .order_by(Submission.submitted_at.desc()).all()
+    sort = request.args.get('sort', 'time')
+    submission_data = []
+    for sub in submissions:
+        level, tab_sw, paste, ai = _compute_suspicion(sub)
+        submission_data.append({
+            'submission': sub,
+            'suspicion_level': level,
+            'tab_switches': tab_sw,
+            'total_paste': paste,
+            'max_ai': ai
+        })
+    if sort == 'score':
+        submission_data.sort(key=lambda x: x['submission'].total_score or 0, reverse=True)
+    elif sort == 'suspicion':
+        order = {'flagged': 0, 'review': 1, 'clean': 2}
+        submission_data.sort(key=lambda x: order[x['suspicion_level']])
+    max_marks = sum(q.max_marks for q in exam.questions)
+    return render_template('teacher/exam_results.html',
+                           exam=exam, submission_data=submission_data,
+                           sort=sort, max_marks=max_marks)
+
+
+@teacher_bp.route('/exam/<int:exam_id>/export_csv')
+@login_required
+@teacher_required
+def export_csv(exam_id):
+    exam = Exam.query.filter_by(id=exam_id, teacher_id=current_user.id).first_or_404()
+    submissions = Submission.query.filter_by(exam_id=exam_id)\
+                                  .order_by(Submission.submitted_at.desc()).all()
+    max_marks = sum(q.max_marks for q in exam.questions)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Student Name', 'Student Email', 'Submitted At',
+        'Total Score', 'Max Marks', 'Status', 'Released',
+        'Tab Switches', 'Paste Events', 'Max AI Score (%)', 'Suspicion Level'
+    ])
+    for sub in submissions:
+        level, tab_sw, paste, ai = _compute_suspicion(sub)
+        writer.writerow([
+            sub.student.name,
+            sub.student.email,
+            sub.submitted_at.strftime('%Y-%m-%d %H:%M'),
+            f'{sub.total_score:.1f}' if sub.total_score is not None else '',
+            max_marks, sub.status,
+            'Yes' if sub.released else 'No',
+            tab_sw, paste, f'{ai:.0f}', level.capitalize()
+        ])
+    output.seek(0)
+    filename = exam.title.replace(' ', '_')
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}_results.csv"'}
+    )
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _compute_suspicion(submission):
+    """Return (level, tab_switches, total_paste, max_ai) for a submission."""
+    answers = submission.answers
+    tab_switches = max((a.tab_switches or 0) for a in answers) if answers else 0
+    total_paste = sum(a.paste_events or 0 for a in answers)
+    max_ai = max((a.ai_flag_score or 0) for a in answers) if answers else 0
+    if submission.status == 'flagged' or max_ai > 70 or tab_switches > 5 or total_paste > 3:
+        level = 'flagged'
+    elif max_ai >= 30 or tab_switches >= 3 or total_paste >= 2:
+        level = 'review'
+    else:
+        level = 'clean'
+    return level, tab_switches, total_paste, max_ai
+
 
 def _reorder_questions(exam_id):
     questions = Question.query.filter_by(exam_id=exam_id).order_by(Question.order).all()
